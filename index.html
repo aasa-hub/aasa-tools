@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FLAPJAX verifier · pinned-block checks</title>
+<style>
+:root{--bg:#0d0f0c;--fg:#e8e6df;--mut:#8d9188;--ok:#3ddc84;--bad:#ff5c5c;--warn:#e3b341;--line:#23271f;--card:#131710}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:14px/1.55 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+.wrap{max-width:940px;margin:0 auto;padding:32px 20px 64px}
+h1{font-size:18px;letter-spacing:.02em;margin:0 0 6px}
+.sub{color:var(--mut);font-size:12.5px;margin-bottom:22px}
+.meta{display:flex;flex-wrap:wrap;gap:10px;margin-bottom:18px}
+.pill{border:1px solid var(--line);background:var(--card);border-radius:4px;padding:5px 9px;font-size:12px;color:var(--mut)}
+.pill b{color:var(--fg);font-weight:600}
+table{width:100%;border-collapse:collapse;border:1px solid var(--line);background:var(--card)}
+th,td{text-align:left;padding:10px 12px;border-bottom:1px solid var(--line);vertical-align:top;font-size:13px}
+th{color:var(--mut);font-weight:500;font-size:11.5px;text-transform:uppercase;letter-spacing:.06em}
+tr:last-child td{border-bottom:none}
+.st{font-weight:700;font-size:11.5px;letter-spacing:.05em}
+.PASS{color:var(--ok)}.FAIL{color:var(--bad)}.PENDING{color:var(--warn)}
+.det{color:var(--mut);word-break:break-all}
+button{font:inherit;background:#1b2116;color:var(--fg);border:1px solid var(--line);border-radius:4px;padding:7px 12px;cursor:pointer}
+button:hover{border-color:#3a4433}
+.row{display:flex;gap:10px;flex-wrap:wrap;margin:18px 0}
+pre{background:var(--card);border:1px solid var(--line);border-radius:4px;padding:14px;overflow:auto;font-size:12px;color:#c9cec2;max-height:420px}
+.foot{margin-top:26px;color:var(--mut);font-size:12px;border-top:1px solid var(--line);padding-top:16px}
+.foot b{color:var(--fg)}
+a{color:#8ed4a8}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>FLAPJAX verifier</h1>
+  <div class="sub">Every claim read live from a public BSC RPC at one pinned block. PASS / FAIL / NOT VERIFIABLE. No keys, no backend, no tracking.</div>
+
+  <div class="meta">
+    <div class="pill">block <b id="blk">…</b></div>
+    <div class="pill">endpoint <b id="ep">…</b></div>
+    <div class="pill">runs <b id="when">…</b></div>
+  </div>
+
+  <table>
+    <thead><tr><th style="width:34%">check</th><th style="width:11%">status</th><th>what the chain returned</th></tr></thead>
+    <tbody id="rows"><tr><td>reading chain…</td><td class="st PENDING">…</td><td class="det"></td></tr></tbody>
+  </table>
+
+  <div class="row">
+    <button id="again">Re-verify at a new pinned block</button>
+    <button id="copy">Copy JSON</button>
+  </div>
+
+  <pre id="json">…</pre>
+
+  <div class="foot">
+    <div><b>Method.</b> One <code>eth_blockNumber</code>, then every read pinned to that block number: <code>eth_getCode</code>, <code>eth_call</code> and <code>eth_getStorageAt</code>. Re-running against the same block must return the same bytes, which is the whole test. Sixteen privileged selectors are searched inside the deployed runtime bytecode, not in source.</div>
+    <div style="margin-top:10px"><b>Token</b> <span id="tok"></span> · <b>treasury</b> <span id="tre"></span></div>
+    <div style="margin-top:10px"><b>What this does not measure:</b> LP lock ownership (that needs the locker contract's own state), holder distribution, and off-chain claim review. Statements about those are not verified here.</div>
+    <div style="margin-top:10px">MIT. Built by @aasa_avatar · <a href="https://flapjax.surge.sh/">flapjax.surge.sh</a> · compute = calories</div>
+  </div>
+</div>
+
+<script>
+const ENDPOINTS=["https://bsc-rpc.publicnode.com","https://bsc-dataseed.binance.org","https://1rpc.io/bnb"];
+const TOKEN="0x90c8889f428F9Ebb77BB8f15CAD3a50a9aC680df";
+const TREASURY="0x7C34E9e21eE28A49Ff0b84B61774119E6633359f";
+const POOLS=[["FLAPJAX/WBNB 1%","0xca93ec685b8623688e6b236f9068034b298c2150"],
+             ["FLAPJAX/BTCB 1%","0x740a3b4a91cb8fa47e85d7f9713ca6ec2f8a037e"]];
+const DANGER={"0x40c10f19":"mint(address,uint256)","0xa0712d68":"mint(uint256)","0x8456cb59":"pause()",
+"0x3f4ba83a":"unpause()","0xf9f92be4":"blacklist(address)","0x0ecb93c0":"addBlackList(address)",
+"0xc6d69a30":"setTaxRate(uint256)","0x2e5bb6ff":"setTax(uint256)","0x69fe0e2d":"setFee(uint256)",
+"0x437823ec":"excludeFromFee(address)","0xea2f0b37":"includeInFee(address)","0x3659cfe6":"upgradeTo(address)",
+"0x4f1ef286":"upgradeToAndCall(address,bytes)","0x153b0d1e":"setBlacklist(address,bool)",
+"0xec28438a":"setMaxTxAmount(uint256)","0xc2e5ec04":"setTradingEnabled(bool)"};
+const IMPL="0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc";
+const ADMIN="0xb53127684a568b3173ae13b9f8a6016e243e63b6e8ee1178d6a717850b5d6103";
+let EP=null;
+async function rpc(url,method,params,ms=15000){
+  const ctl=new AbortController();
+  const timer=setTimeout(()=>ctl.abort(),ms);
+  try{
+    const r=await fetch(url,{method:"POST",headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({jsonrpc:"2.0",id:1,method,params}),signal:ctl.signal});
+    if(!r.ok) throw new Error("HTTP "+r.status);
+    const j=await r.json();
+    if(j.error) throw new Error(j.error.message||"rpc error");
+    return j.result;
+  } finally { clearTimeout(timer); }
+}
+async function pick(){
+  const fails=[];
+  for(const u of ENDPOINTS){
+    try{ await rpc(u,"eth_blockNumber",[],8000); return u; }
+    catch(e){ fails.push(u.replace("https://","")+": "+(e.name==="AbortError"?"timeout":e.message)); }
+  }
+  throw new Error("no reachable BSC endpoint ("+fails.join("; ")+")");
+}
+const word=h=>{h=(h||"0x").slice(2);return BigInt("0x"+(h.slice(0,64)||"0"));};
+function decStr(h){h=h.slice(2);const len=parseInt(h.slice(64,128),16);const bytes=h.slice(128,128+len*2);
+  return bytes.match(/.{1,2}/g).map(b=>String.fromCharCode(parseInt(b,16))).join("");}
+function render(o){
+  document.getElementById("blk").textContent=o.block;
+  document.getElementById("ep").textContent=o.endpoint.replace("https://","");
+  document.getElementById("when").textContent=new Date().toISOString().replace("T"," ").slice(0,19)+"Z";
+  document.getElementById("rows").innerHTML=o.checks.map(c=>
+    `<tr><td>${c.name}</td><td class="st ${c.status}">${c.status}</td><td class="det">${c.detail}</td></tr>`).join("");
+  document.getElementById("json").textContent=JSON.stringify(o,null,1);
+}
+async function run(){
+  document.getElementById("json").textContent="…";
+  const out={endpoint:null,block:null,checks:[],unmeasured:[
+    "LP lock ownership (needs the locker contract's own state)",
+    "holder distribution and top-holder concentration",
+    "off-chain bounty claims and their review status"]};
+  const add=(name,status,detail)=>out.checks.push({name,status,detail});
+  try{
+    EP=await pick(); out.endpoint=EP;
+    const blk=parseInt(await rpc(EP,"eth_blockNumber",[]),16); out.block=blk;
+    const B="0x"+blk.toString(16);
+    const call=(to,data)=>rpc(EP,"eth_call",[{to,data},B]);
+    const code=await rpc(EP,"eth_getCode",[TOKEN,B]);
+    add("token has code",code&&code.length>2?"PASS":"FAIL",`${code?code.length/2-1:0} bytes at block ${blk}`);
+    const sym=decStr(await call(TOKEN,"0x95d89b41"));
+    const dec=Number(word(await call(TOKEN,"0x313ce567")));
+    const sup=word(await call(TOKEN,"0x18160ddd"));
+    const supFmt=(Number(sup)/10**dec).toLocaleString(undefined,{maximumFractionDigits:0});
+    add("symbol / decimals",(sym==="FLAPJAX"&&dec===18)?"PASS":"FAIL",`${sym}, ${dec} decimals, totalSupply ${supFmt} (as-is, no price attached)`);
+    const own=await call(TOKEN,"0x8da5cb5b");
+    add("owner() burned",word(own)===0n?"PASS":"FAIL",own);
+    const impl=await rpc(EP,"eth_getStorageAt",[TOKEN,IMPL,B]);
+    const adm=await rpc(EP,"eth_getStorageAt",[TOKEN,ADMIN,B]);
+    add("not a proxy (EIP-1967)",(word(impl)===0n&&word(adm)===0n)?"PASS":"FAIL",`impl slot ${impl} · admin slot ${adm}`);
+    const lc=code.toLowerCase();
+    const found=Object.keys(DANGER).filter(s=>lc.includes(s.slice(2)));
+    add("privileged selectors absent",found.length===0?"PASS":"FAIL",
+      found.map(s=>DANGER[s]).join(", ")||`none of ${Object.keys(DANGER).length} privileged selectors in runtime bytecode`);
+    const tre=word(await call(TOKEN,"0x70a08231"+"0".repeat(24)+TREASURY.slice(2).toLowerCase()));
+    add("treasury balance read","PASS",`${(Number(tre)/1e18).toLocaleString(undefined,{maximumFractionDigits:0})} FJ at block ${blk} (read only)`);
+    for(const [label,p] of POOLS){
+      const pc=await rpc(EP,"eth_getCode",[p,B]);
+      if(!pc||pc.length<=2){ add(`pool ${label}`,"FAIL","no code at this address"); continue; }
+      const t0="0x"+(await call(p,"0x0dfe1681")).slice(-40);
+      const t1="0x"+(await call(p,"0xd21220a7")).slice(-40);
+      const fee=word(await call(p,"0xddca3f43"));
+      const liq=word(await call(p,"0x1a686502"));
+      const s0=word(await call(p,"0x3850c7bd"));
+      const hasFj=(t0.toLowerCase()===TOKEN.toLowerCase()||t1.toLowerCase()===TOKEN.toLowerCase());
+      add(`pool ${label}`,hasFj?"PASS":"FAIL",
+        `token0 ${t0} · token1 ${t1} · fee ${fee} · liquidity ${liq} · sqrtPriceX96 ${s0}`);
+    }
+    render(out);
+  }catch(e){
+    add("chain reachable","FAIL",String(e.message||e));
+    render(out);
+  }
+}
+document.getElementById("again").onclick=run;
+document.getElementById("copy").onclick=async()=>{
+  try{ await navigator.clipboard.writeText(document.getElementById("json").textContent);
+    document.getElementById("copy").textContent="Copied"; setTimeout(()=>document.getElementById("copy").textContent="Copy JSON",1200);
+  }catch(e){}
+};
+document.getElementById("tok").textContent=TOKEN;
+document.getElementById("tre").textContent=TREASURY;
+run();
+</script>
+</body>
+</html>
